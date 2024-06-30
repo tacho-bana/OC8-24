@@ -1,58 +1,60 @@
-from flask import Flask, request, render_template, send_from_directory
-import librosa
+from flask import Flask, request, redirect, url_for, send_from_directory, render_template
 import os
+import librosa
 import numpy as np
+import matplotlib.pyplot as plt
+from moviepy.editor import ImageClip, concatenate_videoclips
 
 app = Flask(__name__)
-UPLOAD_FOLDER = 'uploads/'
+UPLOAD_FOLDER = 'uploads'
+PROCESSED_FOLDER = 'processed'
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+app.config['PROCESSED_FOLDER'] = PROCESSED_FOLDER
 
-# ディレクトリが存在しない場合は作成する
-if not os.path.exists(UPLOAD_FOLDER):
-    os.makedirs(UPLOAD_FOLDER)
+# フォルダの作成
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+os.makedirs(PROCESSED_FOLDER, exist_ok=True)
 
 @app.route('/')
-def upload_file():
-    return render_template('upload.html')
+def index():
+    return render_template('index.html')
 
 @app.route('/upload', methods=['POST'])
-def process_file():
+def upload_file():
     if 'file' not in request.files:
-        return 'No file part'
+        return redirect(request.url)
     file = request.files['file']
     if file.filename == '':
-        return 'No selected file'
+        return redirect(request.url)
     if file:
-        file_path = os.path.join(app.config['UPLOAD_FOLDER'], file.filename)
-        file.save(file_path)
+        filepath = os.path.join(app.config['UPLOAD_FOLDER'], file.filename)
+        file.save(filepath)
+        process_file(filepath, file.filename)
+        return redirect(url_for('processed_file', filename=file.filename))
+    return redirect(request.url)
 
-        # Librosaを使ってBPMとダイナミクスを解析
-        y, sr = librosa.load(file_path)
-        tempo, _ = librosa.beat.beat_track(y=y, sr=sr)
+def process_file(filepath, filename):
+    y, sr = librosa.load(filepath)
+    S, phase = librosa.magphase(librosa.stft(y))
+    rms = librosa.feature.rms(S=S)
+    frames = range(len(rms[0]))
+    times = librosa.frames_to_time(frames, sr=sr)
+    colors = [plt.cm.viridis(x) for x in rms[0] / max(rms[0])]
+    
+    fig, ax = plt.subplots(figsize=(10, 2))
+    for i, color in enumerate(colors):
+        ax.set_facecolor(color)
+        plt.title(f'Time: {times[i]:.2f}s')
+        plt.axis('off')
+        plt.savefig(f'{app.config["PROCESSED_FOLDER"]}/frame_{i:04d}.png')
+    
+    image_clips = [ImageClip(f'{app.config["PROCESSED_FOLDER"]}/frame_{i:04d}.png').set_duration(times[1] - times[0]) for i in range(len(colors))]
+    video = concatenate_videoclips(image_clips, method="compose")
+    video.write_videofile(f'{app.config["PROCESSED_FOLDER"]}/{filename}.mp4', fps=24)
 
-        # ダイナミクスの解析
-        rms = librosa.feature.rms(y=y)[0]
-
-        # 背景色の変化ポイントを計算
-        color_changes = [get_background_color(value) for value in rms]
-
-        # リアルタイムのタイムスタンプを生成
-        duration = librosa.get_duration(y=y, sr=sr)
-        timestamps = np.linspace(0, duration, len(color_changes))
-
-        return render_template('player.html', file_path=file_path, color_changes=color_changes, timestamps=timestamps)
-
-@app.route('/uploads/<filename>')
-def uploaded_file(filename):
-    return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
-
-def get_background_color(rms_value):
-    if rms_value > 0.1:  # 適切な閾値に調整してください
-        return 'lightcoral'
-    elif rms_value < 0.05:  # 適切な閾値に調整してください
-        return 'lightblue'
-    else:
-        return 'white'
+@app.route('/processed/<filename>')
+def processed_file(filename):
+    return send_from_directory(app.config['PROCESSED_FOLDER'], filename + '.mp4')
 
 if __name__ == '__main__':
     app.run(debug=True)
