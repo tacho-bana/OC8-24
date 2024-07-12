@@ -1,67 +1,33 @@
-from fastapi import FastAPI, File, UploadFile, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse
-from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
-import os
+from flask import Flask, render_template, request
 import librosa
 import numpy as np
-import matplotlib.pyplot as plt
-from moviepy.editor import ImageClip, concatenate_videoclips
-import aiofiles
 
-app = FastAPI()
+app = Flask(__name__)
 
-UPLOAD_FOLDER = 'uploads'
-PROCESSED_FOLDER = 'processed'
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-os.makedirs(PROCESSED_FOLDER, exist_ok=True)
+def analyze_audio(file_path):
+    y, sr = librosa.load(file_path)
+    # Calculate the root-mean-square (RMS) energy for each frame
+    rms = librosa.feature.rms(y=y)[0]
+    # Normalize the RMS values to [0, 1]
+    rms_normalized = (rms - np.min(rms)) / (np.max(rms) - np.min(rms))
+    return rms_normalized.tolist()
 
-app.mount("/static", StaticFiles(directory="static"), name="static")
-templates = Jinja2Templates(directory="templates")
+@app.route('/')
+def index():
+    return render_template('index.html')
 
-@app.get("/", response_class=HTMLResponse)
-async def read_root(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
+@app.route('/upload', methods=['POST'])
+def upload():
+    if 'file' not in request.files:
+        return 'No file part'
+    file = request.files['file']
+    if file.filename == '':
+        return 'No selected file'
+    if file:
+        file_path = 'uploaded_audio.wav'
+        file.save(file_path)
+        rms_data = analyze_audio(file_path)
+        return {'rms_data': rms_data}
 
-@app.post("/upload")
-async def upload_file(file: UploadFile = File(...)):
-    if file.content_type not in ["audio/mpeg", "audio/wav"]:
-        raise HTTPException(status_code=400, detail="Invalid file type. Only MP3 and WAV files are allowed.")
-    
-    file_path = os.path.join(UPLOAD_FOLDER, file.filename)
-    async with aiofiles.open(file_path, 'wb') as out_file:
-        content = await file.read()
-        await out_file.write(content)
-    
-    process_file(file_path, file.filename)
-    return {"filename": file.filename}
-
-def process_file(filepath, filename):
-    y, sr = librosa.load(filepath)
-    S, phase = librosa.magphase(librosa.stft(y))
-    rms = librosa.feature.rms(S=S)
-    frames = range(len(rms[0]))
-    times = librosa.frames_to_time(frames, sr=sr)
-    colors = [plt.cm.viridis(x) for x in rms[0] / max(rms[0])]
-    
-    fig, ax = plt.subplots(figsize=(10, 2))
-    for i, color in enumerate(colors):
-        ax.set_facecolor(color)
-        plt.title(f'Time: {times[i]:.2f}s')
-        plt.axis('off')
-        plt.savefig(f'{PROCESSED_FOLDER}/frame_{i:04d}.png')
-    
-    image_clips = [ImageClip(f'{PROCESSED_FOLDER}/frame_{i:04d}.png').set_duration(times[1] - times[0]) for i in range(len(colors))]
-    video = concatenate_videoclips(image_clips, method="compose")
-    video.write_videofile(f'{PROCESSED_FOLDER}/{filename}.mp4', fps=24)
-
-@app.get("/processed/{filename}")
-async def processed_file(filename: str):
-    file_path = os.path.join(PROCESSED_FOLDER, filename + ".mp4")
-    if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="File not found")
-    return FileResponse(file_path)
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+if __name__ == '__main__':
+    app.run(debug=True)
