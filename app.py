@@ -1,33 +1,40 @@
-from flask import Flask, render_template, request
-import librosa
 import numpy as np
-
-app = Flask(__name__)
+import librosa
+import matplotlib.pyplot as plt
+from moviepy.editor import VideoClip, AudioFileClip
+from moviepy.video.io.bindings import mplfig_to_npimage
 
 def analyze_audio(file_path):
     y, sr = librosa.load(file_path)
-    # Calculate the root-mean-square (RMS) energy for each frame
     rms = librosa.feature.rms(y=y)[0]
-    # Normalize the RMS values to [0, 1]
     rms_normalized = (rms - np.min(rms)) / (np.max(rms) - np.min(rms))
-    return rms_normalized.tolist()
+    return y, sr, rms_normalized
 
-@app.route('/')
-def index():
-    return render_template('index.html')
+def get_background_color(intensity):
+    red = int(255 * intensity)
+    green = int(255 * (1 - intensity))
+    return (red, green, 0)
 
-@app.route('/upload', methods=['POST'])
-def upload():
-    if 'file' not in request.files:
-        return 'No file part'
-    file = request.files['file']
-    if file.filename == '':
-        return 'No selected file'
-    if file:
-        file_path = 'uploaded_audio.wav'
-        file.save(file_path)
-        rms_data = analyze_audio(file_path)
-        return {'rms_data': rms_data}
+def make_frame(t, y, sr, rms_normalized, fps):
+    fig, ax = plt.subplots(figsize=(10, 2))
+    start = int(t * sr)
+    end = int((t + 1 / fps) * sr)
+    ax.plot(y[start:end])
+    ax.axis('off')
+    intensity_index = int(t * fps / len(rms_normalized) * len(rms_normalized))
+    color = get_background_color(rms_normalized[intensity_index])
+    fig.patch.set_facecolor(np.array(color) / 255)
+    frame = mplfig_to_npimage(fig)
+    plt.close(fig)
+    return frame
 
-if __name__ == '__main__':
-    app.run(debug=True)
+audio_path = '/Users/tachibananoyushou/OC8-24/mirai-demo-HardRock.mp3'
+y, sr, rms_normalized = analyze_audio(audio_path)
+fps = 24
+duration = len(y) / sr
+
+video = VideoClip(lambda t: make_frame(t, y, sr, rms_normalized, fps), duration=duration)
+audio = AudioFileClip(audio_path)
+video = video.set_audio(audio)
+output_path = 'output_video.mp4'
+video.write_videofile(output_path, fps=fps)
