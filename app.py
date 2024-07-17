@@ -37,7 +37,7 @@ def make_frame(t, y, sr, rms_normalized, fps):  #t, y, sr, rms_normalized, fps�
     plt.close(fig)
     return frame
 
-audio_path = 'y2mate.com - Mrs GREEN APPLEナハトムジークOfficial Music Video.mp3'
+audio_path = 'y2mate.com - Mrs GREEN APPLEナハトムジークOfficial Music Video.mp3'   #ここに曲ファイル
 y, sr, rms_normalized = analyze_audio(audio_path)
 fps = 24
 duration = len(y) / sr
